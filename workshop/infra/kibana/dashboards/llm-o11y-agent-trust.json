@@ -1,0 +1,262 @@
+{
+  "title": "Agent trust",
+  "description": "LLM o11y 101: guardrail decisions and LLM-as-a-judge scores, from gen_ai.evaluation.result events.",
+  "time_range": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "refresh_interval": {
+    "pause": false,
+    "value": 10000
+  },
+  "panels": [
+    {
+      "type": "markdown",
+      "grid": {
+        "x": 0,
+        "y": 0,
+        "w": 48,
+        "h": 4
+      },
+      "config": {
+        "content": "**Agent trust.** Built from OpenTelemetry `gen_ai.evaluation.result` events in `logs-genai.otel-*`. Judge scores (hallucination, relevance, toxicity, pii) arrive from the start. **Guardrail panels empty?** Emitting guardrail results as evaluation events is Lab 3."
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Requests blocked",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.travel_planner.guardrail.action == \"deny\"\n| STATS blocked = COUNT_DISTINCT(trace_id)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "blocked",
+            "format": {
+              "type": "number",
+              "decimals": 0,
+              "compact": false
+            },
+            "label": "Requests blocked by guardrails"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Answers flagged",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.travel_planner.guardrail.action == \"flag\"\n| STATS flagged = COUNT_DISTINCT(trace_id)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "flagged",
+            "format": {
+              "type": "number",
+              "decimals": 0,
+              "compact": false
+            },
+            "label": "Answers flagged (postflight)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Hallucination rate",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.gen_ai.evaluation.name == \"hallucination\"\n| STATS failed = COUNT(*) WHERE attributes.gen_ai.evaluation.score.label == \"fail\", total = COUNT(*)\n| EVAL rate = ROUND(100.0 * failed / total, 1)\n| KEEP rate"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "rate",
+            "format": {
+              "type": "number",
+              "decimals": 1,
+              "compact": false,
+              "suffix": "%"
+            },
+            "label": "Answers judged hallucinated"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 36,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Average relevance",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.gen_ai.evaluation.name == \"relevance\"\n| STATS relevance = AVG(attributes.gen_ai.evaluation.score.value)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "relevance",
+            "format": {
+              "type": "number",
+              "decimals": 2,
+              "compact": false
+            },
+            "label": "Avg relevance score (0-1)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "xy",
+        "title": "Guardrail decisions, by guard",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.travel_planner.guardrail.action IS NOT NULL\n| STATS decisions = COUNT(*) BY guard = attributes.gen_ai.evaluation.name, action = attributes.travel_planner.guardrail.action"
+            },
+            "x": {
+              "column": "guard"
+            },
+            "y": [
+              {
+                "column": "decisions"
+              }
+            ],
+            "breakdown_by": {
+              "column": "action"
+            }
+          }
+        ],
+        "legend": {
+          "visibility": "visible",
+          "placement": "outside",
+          "position": "right"
+        }
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 11,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "xy",
+        "title": "LLM-as-a-judge scores over time",
+        "layers": [
+          {
+            "type": "line",
+            "data_source": {
+              "type": "esql",
+              "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.travel_planner.evaluator == \"llm-judge\"\n| STATS score = AVG(attributes.gen_ai.evaluation.score.value) BY t = BUCKET(@timestamp, 40, ?_tstart, ?_tend), evaluation = attributes.gen_ai.evaluation.name"
+            },
+            "x": {
+              "column": "t"
+            },
+            "y": [
+              {
+                "column": "score"
+              }
+            ],
+            "breakdown_by": {
+              "column": "evaluation"
+            }
+          }
+        ],
+        "legend": {
+          "visibility": "visible",
+          "placement": "outside",
+          "position": "right"
+        }
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 23,
+        "w": 48,
+        "h": 14
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Failed checks: what went wrong, and where (trace_id)",
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM logs-genai.otel-*\n| WHERE attributes.gen_ai.evaluation.score.label == \"fail\"\n| SORT @timestamp DESC\n| KEEP @timestamp, attributes.gen_ai.evaluation.name, attributes.travel_planner.guardrail.action, attributes.gen_ai.evaluation.score.value, attributes.gen_ai.evaluation.explanation, trace_id\n| RENAME attributes.gen_ai.evaluation.name AS check, attributes.travel_planner.guardrail.action AS action, attributes.gen_ai.evaluation.score.value AS score, attributes.gen_ai.evaluation.explanation AS explanation\n| LIMIT 50"
+        },
+        "rows": [
+          {
+            "column": "@timestamp"
+          },
+          {
+            "column": "check"
+          },
+          {
+            "column": "action"
+          },
+          {
+            "column": "explanation"
+          },
+          {
+            "column": "trace_id"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "score"
+          }
+        ]
+      }
+    }
+  ]
+}

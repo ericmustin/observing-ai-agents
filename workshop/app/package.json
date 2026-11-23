@@ -1,0 +1,46 @@
+{
+  "name": "travel-planner-workshop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "ingest": "tsx scripts/ingest-flights.ts",
+    "traffic": "tsx scripts/traffic.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "4.0.111",
+    "@ai-sdk/otel": "1.0.165",
+    "@ai-sdk/react": "4.0.169",
+    "@elastic/elasticsearch": "9.5.1",
+    "@opentelemetry/api": "1.10.0",
+    "@opentelemetry/exporter-logs-otlp-proto": "0.301.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.301.0",
+    "@opentelemetry/instrumentation-http": "0.301.0",
+    "@opentelemetry/instrumentation-undici": "0.35.0",
+    "@opentelemetry/resources": "3.1.0",
+    "@opentelemetry/sdk-logs": "3.1.0",
+    "@opentelemetry/sdk-node": "0.301.0",
+    "@opentelemetry/semantic-conventions": "1.45.0",
+    "ai": "7.0.165",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "showdown": "2.1.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/showdown": "2.0.6",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  },
+  "overrides": {
+    "@opentelemetry/api": "1.10.0"
+  }
+}

@@ -1,0 +1,240 @@
+name: llm-o11y-101
+
+x-es-auth: &es-auth
+  ELASTICSEARCH_ENDPOINT: ${ELASTICSEARCH_ENDPOINT:-http://elasticsearch:9200}
+  ELASTICSEARCH_USER: ${ELASTICSEARCH_USER:-elastic}
+  ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD:-changeme}
+
+services:
+  # ---------------------------------------------------------------------------
+  # Elastic Stack
+  # ---------------------------------------------------------------------------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-9.5.6}
+    environment:
+      discovery.type: single-node
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-changeme}
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.license.self_generated.type: basic
+      # Laptops are often >90% full; don't let disk watermarks block the workshop.
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+      ES_JAVA_OPTS: -Xms768m -Xmx768m
+    ports:
+      - "${ES_PORT:-9200}:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:$${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health?wait_for_status=yellow | grep -q '\"status\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    # Come back on their own after an OOM kill or a Docker restart.
+    restart: unless-stopped
+    mem_limit: 1.5g
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION:-9.5.6}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      SERVER_NAME: kibana
+      SERVER_PUBLICBASEURL: http://localhost:5601
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ${KIBANA_PASSWORD:-changeme-kibana}
+      # Fixed keys so alerting rules and encrypted saved objects survive restarts.
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: llm-o11y-101-encrypted-saved-objects-key
+      XPACK_SECURITY_ENCRYPTIONKEY: llm-o11y-101-security-encryption-key-000
+      XPACK_REPORTING_ENCRYPTIONKEY: llm-o11y-101-reporting-encryption-key-00
+      # Usage collection off, and no "Help us improve the Elastic Stack" banner on every page.
+      # (telemetry.banner isn't settable from the environment; this hides it.)
+      TELEMETRY_OPTIN: "false"
+      TELEMETRY_ALLOWCHANGINGOPTINSTATUS: "false"
+      NODE_OPTIONS: --max-old-space-size=1024
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -I http://localhost:5601/api/status | grep -q 'HTTP/1.1 200'"]
+      interval: 5s
+      timeout: 5s
+      retries: 90
+    restart: unless-stopped
+    mem_limit: 1.5g
+
+  # One-shot: kibana_system password and index template fixes. Kibana assets are loaded by kibana-setup.
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-9.5.6}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-changeme}
+      KIBANA_PASSWORD: ${KIBANA_PASSWORD:-changeme-kibana}
+    entrypoint: ["bash", "/setup/es-setup.sh"]
+    volumes:
+      - ./infra/setup:/setup:ro
+    restart: "no"
+
+  # One-shot: data views, dashboards and the (disabled) alert rule.
+  kibana-setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-9.5.6}
+    depends_on:
+      kibana:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-changeme}
+    entrypoint: ["bash", "/setup/kibana-setup.sh"]
+    volumes:
+      - ./infra/setup:/setup:ro
+      - ./infra/kibana:/kibana:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Telemetry pipeline
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      # setup installs index templates that must exist before the first document lands
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *es-auth
+    ports:
+      # Nothing in the workshop needs these on the host except health_check (make doctor,
+      # make collector-restart); they're published for poking around. Change them in .env if they clash.
+      - "${OTLP_GRPC_PORT:-4317}:4317"         # OTLP gRPC
+      - "${OTLP_HTTP_PORT:-4318}:4318"         # OTLP HTTP
+      - "${COLLECTOR_PROM_PORT:-8889}:8889"    # Prometheus exporter (GenAI metrics)
+      - "${COLLECTOR_METRICS_PORT:-8888}:8888" # Collector self-telemetry
+      - "${COLLECTOR_HEALTH_PORT:-13133}:13133" # health_check
+    volumes:
+      # Bind-mounted so Lab 2 is "edit the YAML, run `make collector-restart`".
+      - ./infra/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    restart: unless-stopped
+    mem_limit: 512m
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    environment:
+      <<: *es-auth
+    # Prometheus doesn't expand env vars in its config, so render it at start-up.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        sed -e "s#__ES_ENDPOINT__#$${ELASTICSEARCH_ENDPOINT}#"
+        -e "s#__ES_USER__#$${ELASTICSEARCH_USER}#"
+        -e "s#__ES_PASSWORD__#$${ELASTICSEARCH_PASSWORD}#"
+        /etc/prometheus/prometheus.tmpl.yml > /prometheus/prometheus.yml &&
+        exec /bin/prometheus --config.file=/prometheus/prometheus.yml
+        --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=1d --web.enable-lifecycle
+    depends_on:
+      - otel-collector
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.tmpl.yml:ro
+    restart: unless-stopped
+    mem_limit: 256m
+
+  # ---------------------------------------------------------------------------
+  # The agent
+  # ---------------------------------------------------------------------------
+  # Offline, OpenAI-compatible stand-in for a real model (LLM_MODE=mock).
+  mock-llm:
+    image: node:24-alpine
+    command: ["node", "/srv/server.mjs"]
+    environment:
+      PORT: "8080"
+      MOCK_MODEL: gpt-4o-mini
+      MOCK_ERROR_RATE: ${MOCK_ERROR_RATE:-0}
+    volumes:
+      - ./mock-llm:/srv:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 128m
+
+  # One-shot: loads ~90 days of flights into the `upcoming-flight-data` index.
+  flights-loader:
+    image: llm-o11y-101/app:local
+    # Built locally by app-build: never try to pull it from a registry.
+    pull_policy: never
+    command: ["npm", "run", "ingest"]
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      app-build:
+        condition: service_completed_successfully
+    environment: &app-es
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_USER: elastic
+      ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD:-changeme}
+    restart: "no"
+
+  # Builds the app image once so `app` and `flights-loader` share it.
+  app-build:
+    image: llm-o11y-101/app:local
+    build: ./app
+    command: ["true"]
+    restart: "no"
+
+  app:
+    image: llm-o11y-101/app:local
+    pull_policy: never
+    depends_on:
+      app-build:
+        condition: service_completed_successfully
+      flights-loader:
+        condition: service_completed_successfully
+      mock-llm:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      <<: *app-es
+      # --- LLM -------------------------------------------------------------
+      LLM_MODE: ${LLM_MODE:-mock}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      MOCK_LLM_URL: http://mock-llm:8080/v1
+      # --- Agent -----------------------------------------------------------
+      AI_TELEMETRY: ${AI_TELEMETRY:-legacy}
+      TOOLS_MODE: ${TOOLS_MODE:-online}
+      EVAL_SAMPLE_RATE: ${EVAL_SAMPLE_RATE:-1}
+      # --- OpenTelemetry (standard SDK env vars) --------------------------
+      OTEL_SERVICE_NAME: travel-planner
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRICS_EXPORTER: none
+      # --- Next.js ---------------------------------------------------------
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Next.js traces fetch() itself with older HTTP conventions; the undici instrumentation
+      # already covers it with stable HTTP semconv, so turn Next's copy off.
+      NEXT_OTEL_FETCH_DISABLED: "1"
+      WATCHPACK_POLLING: ${WATCHPACK_POLLING:-false}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      # Bind-mounted so Lab 3 edits hot-reload.
+      - ./app/src:/app/src
+      - ./app/scripts:/app/scripts:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 30s
+      start_period: 60s
+      retries: 30
+    restart: unless-stopped
+    mem_limit: 1.5g
+
+volumes:
+  es-data:

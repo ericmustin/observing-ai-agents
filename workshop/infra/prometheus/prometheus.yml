@@ -1,0 +1,27 @@
+# Prometheus scrapes the collector's GenAI metrics and forwards everything to
+# Elasticsearch's native Prometheus remote-write endpoint (GA in 9.5).
+# __ES_ENDPOINT__ / __ES_USER__ / __ES_PASSWORD__ are filled in from .env at container start.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # GenAI semconv metrics derived by the collector's signaltometrics connector.
+  - job_name: genai
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  # The collector's own health: accepted/refused/exported items, queue sizes.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+remote_write:
+  - url: __ES_ENDPOINT__/_prometheus/api/v1/write
+    # Elasticsearch accepts Remote Write 1.0 only.
+    protobuf_message: prometheus.WriteRequest
+    basic_auth:
+      username: __ES_USER__
+      password: __ES_PASSWORD__
+    queue_config:
+      batch_send_deadline: 2s

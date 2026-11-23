@@ -1,0 +1,7 @@
+# Keep Unix line endings for scripts and configs, even in a Windows checkout (they run in Linux containers and WSL).
+*.sh       text eol=lf
+Makefile   text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.ndjson   text eol=lf
+.env.example text eol=lf

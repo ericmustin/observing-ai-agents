@@ -1,0 +1,28 @@
+{
+  "name": "Agent token budget",
+  "rule_type_id": ".es-query",
+  "consumer": "stackAlerts",
+  "enabled": false,
+  "schedule": {
+    "interval": "1m"
+  },
+  "tags": [
+    "llm-o11y-101"
+  ],
+  "params": {
+    "searchType": "esqlQuery",
+    "esqlQuery": {
+      "esql": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE gen_ai.client.token.usage IS NOT NULL\n| STATS tokens = SUM(gen_ai.client.token.usage) BY model = attributes.gen_ai.request.model\n// LAB 4: pick a budget that one `make traffic` run breaks within a minute\n| WHERE tokens > 50000"
+    },
+    "timeField": "@timestamp",
+    "timeWindowSize": 1,
+    "timeWindowUnit": "m",
+    "threshold": [
+      0
+    ],
+    "thresholdComparator": ">",
+    "size": 0,
+    "groupBy": "row"
+  },
+  "actions": []
+}
