@@ -1,0 +1,296 @@
+{
+  "title": "Agent overview",
+  "description": "LLM o11y 101: what the travel-planner agent is doing and what it costs, from GenAI semconv telemetry.",
+  "time_range": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "refresh_interval": {
+    "pause": false,
+    "value": 10000
+  },
+  "panels": [
+    {
+      "type": "markdown",
+      "grid": {
+        "x": 0,
+        "y": 0,
+        "w": 48,
+        "h": 4
+      },
+      "config": {
+        "content": "**Agent overview.** Every panel is ES|QL over data the OpenTelemetry Collector derives from [GenAI semconv](https://opentelemetry.io/docs/specs/semconv/gen-ai/) spans: `gen_ai.client.token.usage`, `gen_ai.client.operation.duration` and `travel_planner.tool.calls`. **Empty?** Those metrics only exist once spans carry `gen_ai.operation.name`, which is Lab 2."
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Agent invocations",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM traces-*.otel-*\n| WHERE attributes.gen_ai.operation.name == \"invoke_agent\" AND attributes.gen_ai.agent.name == \"travel-planner\"\n| STATS invocations = COUNT(*)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "invocations",
+            "format": {
+              "type": "number",
+              "decimals": 0,
+              "compact": false
+            },
+            "label": "Agent invocations"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Tokens used",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE gen_ai.client.token.usage IS NOT NULL\n| STATS tokens = SUM(gen_ai.client.token.usage)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "tokens",
+            "format": {
+              "type": "number",
+              "decimals": 0,
+              "compact": false
+            },
+            "label": "Tokens (input + output)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "Estimated cost (USD)",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE gen_ai.client.token.usage IS NOT NULL\n| STATS tokens = SUM(gen_ai.client.token.usage) BY model = attributes.gen_ai.request.model, type = attributes.gen_ai.token.type\n// Illustrative USD list prices per 1M tokens: edit to match your models and contract\n| EVAL usd_per_1m = CASE(model LIKE \"gpt-4o-mini*\", CASE(type == \"input\", 0.15, 0.60), model LIKE \"gpt-4.1-nano*\", CASE(type == \"input\", 0.10, 0.40), model LIKE \"gpt-4.1-mini*\", CASE(type == \"input\", 0.40, 1.60), model LIKE \"gpt-4o*\", CASE(type == \"input\", 2.50, 10.00), CASE(type == \"input\", 1.00, 4.00))\n| STATS cost_usd = SUM(tokens * usd_per_1m / 1000000.0)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "cost_usd",
+            "format": {
+              "type": "number",
+              "decimals": 4,
+              "compact": false
+            },
+            "label": "Estimated cost (USD)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 36,
+        "y": 4,
+        "w": 12,
+        "h": 7
+      },
+      "config": {
+        "type": "metric",
+        "title": "LLM latency p95 (s)",
+        "hide_title": true,
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE gen_ai.client.operation.duration IS NOT NULL\n| STATS p95 = PERCENTILE(gen_ai.client.operation.duration, 95)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "p95",
+            "format": {
+              "type": "number",
+              "decimals": 2,
+              "compact": false
+            },
+            "label": "LLM call p95 (s)"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "xy",
+        "title": "Tokens over time, by token type",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE gen_ai.client.token.usage IS NOT NULL\n| STATS tokens = SUM(gen_ai.client.token.usage) BY t = BUCKET(@timestamp, 40, ?_tstart, ?_tend), token_type = attributes.gen_ai.token.type\n| EVAL tokens = TO_DOUBLE(tokens)\n| WHERE tokens IS NOT NULL"
+            },
+            "x": {
+              "column": "t"
+            },
+            "y": [
+              {
+                "column": "tokens"
+              }
+            ],
+            "breakdown_by": {
+              "column": "token_type"
+            }
+          }
+        ],
+        "legend": {
+          "visibility": "visible",
+          "placement": "outside",
+          "position": "right"
+        }
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 24,
+        "y": 11,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "type": "xy",
+        "title": "LLM call latency (s), p50 and p95",
+        "layers": [
+          {
+            "type": "line",
+            "data_source": {
+              "type": "esql",
+              "query": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE gen_ai.client.operation.duration IS NOT NULL\n| STATS p50 = PERCENTILE(gen_ai.client.operation.duration, 50), p95 = PERCENTILE(gen_ai.client.operation.duration, 95) BY t = BUCKET(@timestamp, 40, ?_tstart, ?_tend)\n| EVAL p50 = TO_DOUBLE(p50)\n| EVAL p95 = TO_DOUBLE(p95)\n| WHERE p50 IS NOT NULL AND p95 IS NOT NULL"
+            },
+            "x": {
+              "column": "t"
+            },
+            "y": [
+              {
+                "column": "p50"
+              },
+              {
+                "column": "p95"
+              }
+            ]
+          }
+        ],
+        "legend": {
+          "visibility": "visible",
+          "placement": "outside",
+          "position": "right"
+        }
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 0,
+        "y": 23,
+        "w": 18,
+        "h": 12
+      },
+      "config": {
+        "type": "xy",
+        "title": "Tool calls, by tool and outcome",
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "SET unmapped_fields=\"nullify\";\nFROM metrics-genai.otel-*\n| WHERE travel_planner.tool.calls IS NOT NULL\n| STATS calls = SUM(travel_planner.tool.calls) BY tool = attributes.gen_ai.tool.name, outcome = attributes.error.type\n| EVAL calls = TO_DOUBLE(calls)\n| WHERE calls IS NOT NULL"
+            },
+            "x": {
+              "column": "tool"
+            },
+            "y": [
+              {
+                "column": "calls"
+              }
+            ],
+            "breakdown_by": {
+              "column": "outcome"
+            }
+          }
+        ],
+        "legend": {
+          "visibility": "visible",
+          "placement": "outside",
+          "position": "right"
+        }
+      }
+    },
+    {
+      "type": "vis",
+      "grid": {
+        "x": 18,
+        "y": 23,
+        "w": 30,
+        "h": 12
+      },
+      "config": {
+        "type": "data_table",
+        "title": "Slowest agent runs (search a trace_id in Discover to see its timeline)",
+        "data_source": {
+          "type": "esql",
+          "query": "SET unmapped_fields=\"nullify\";\nFROM traces-*.otel-*\n| WHERE attributes.gen_ai.operation.name == \"invoke_agent\"\n| EVAL duration_ms = ROUND(duration / 1000000.0)\n| SORT duration_ms DESC\n| KEEP @timestamp, attributes.gen_ai.agent.name, attributes.gen_ai.conversation.id, duration_ms, trace_id\n| RENAME attributes.gen_ai.agent.name AS agent, attributes.gen_ai.conversation.id AS conversation\n| LIMIT 25"
+        },
+        "rows": [
+          {
+            "column": "@timestamp"
+          },
+          {
+            "column": "agent"
+          },
+          {
+            "column": "conversation"
+          },
+          {
+            "column": "trace_id"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "duration_ms"
+          }
+        ]
+      }
+    }
+  ]
+}

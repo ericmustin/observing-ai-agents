@@ -2,6 +2,8 @@
 
 Example Travel Planner Application Showing how to observe AI agents using OpenLit. Built Using AI SDK by Vercel and Elasticsearch. Features in the talk [Observing AI Applications with OpenLit and OpenTelemetry](https://ndcmanchester.com/agenda/observing-ai-applications-with-openlit-and-opentelemetry-09c6/0uxqszkow87).
 
+> **Hands-on workshop:** [`workshop/`](./workshop/README.md) is a self-contained, fully local 40-minute version: OpenTelemetry GenAI semantic conventions, the upstream OTel Collector, Prometheus and Elastic 9.5 in Docker Compose, with no cloud accounts, LLM keys or paid Elastic license needed.
+
 ![Travel Planner Screenshot](./screenshots/travel-planner-full.png)
 
 The application comprises several elements including:

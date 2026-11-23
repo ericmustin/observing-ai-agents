@@ -1,0 +1,16 @@
+.env
+# the root .gitignore ignores .env*; attendees need the example
+!.env.example
+node_modules/
+.next/
+my-agent-dashboard.ndjson
+tsconfig.tsbuildinfo
+
+# Presenter notes stay out of the repo
+FACILITATOR.md
+RUN-OF-SHOW.md
+speaker-notes.md
+*.private.*
+private/
+# Office lock files
+.~lock.*
